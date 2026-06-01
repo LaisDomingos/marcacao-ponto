@@ -12,12 +12,14 @@ interface DayStatus {
   finished: boolean;
 }
 
-const ALL_STEPS: { type: PunchType; label: string }[] = [
-  { type: "entrada", label: "Entrada" },
-  { type: "almoco_saida", label: "Saída Almoço" },
-  { type: "almoco_volta", label: "Volta Almoço" },
-  { type: "saida", label: "Saída" },
-];
+interface HistoryRow {
+  workDate: string;
+  entrada: string;
+  almocoSaida: string;
+  almocoVolta: string;
+  saida: string;
+  worked: string;
+}
 
 const NEXT_BUTTON_LABEL: Record<PunchType, string> = {
   entrada: "Registrar Entrada",
@@ -42,6 +44,7 @@ export default function Kiosk({
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
   const [status, setStatus] = useState<DayStatus | null>(null);
+  const [history, setHistory] = useState<HistoryRow[]>([]);
   const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [loading, setLoading] = useState(false);
@@ -66,9 +69,23 @@ export default function Kiosk({
     setPin("");
     setPinConfirm("");
     setStatus(null);
+    setHistory([]);
     setError("");
     setConfirmation("");
   }, []);
+
+  async function loadHistory(id: number, pinValue: string) {
+    try {
+      const res = await fetch("/api/punch/history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ employeeId: id, pin: pinValue }),
+      });
+      if (res.ok) setHistory((await res.json()).rows ?? []);
+    } catch {
+      // histórico é secundário; ignora falha
+    }
+  }
 
   // Primeiro acesso: define o PIN e já entra.
   async function createPin() {
@@ -115,6 +132,7 @@ export default function Kiosk({
         return;
       }
       setStatus(data.status);
+      if (selectedId) loadHistory(selectedId, pin);
     } finally {
       setLoading(false);
     }
@@ -143,6 +161,7 @@ export default function Kiosk({
       setConfirmation(
         `${data.registered.label} registrada às ${marcada?.time ?? ""} ✓`
       );
+      if (selectedId) loadHistory(selectedId, pin);
       setTimeout(reset, 4000);
     } finally {
       setLoading(false);
@@ -151,7 +170,7 @@ export default function Kiosk({
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center p-6">
-      <div className="w-full max-w-md card p-8">
+      <div className={`w-full card p-8 ${status ? "max-w-4xl" : "max-w-md"}`}>
         <div className="mb-6 text-center">
           {companyLogo && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -247,37 +266,10 @@ export default function Kiosk({
         )}
 
         {status && (
-          <div className="space-y-5">
+          <div className="space-y-6">
             <p className="text-center text-lg text-slate-600">
               Olá, <strong className="text-slate-900">{status.employeeName}</strong>
             </p>
-
-            <ul className="space-y-2">
-              {ALL_STEPS.map((step) => {
-                const feito = status.done.find((d) => d.type === step.type);
-                const ehProximo = status.next === step.type;
-                return (
-                  <li
-                    key={step.type}
-                    className={`flex items-center justify-between rounded-xl px-4 py-2.5 ring-1 transition ${
-                      feito
-                        ? "bg-emerald-50 text-emerald-800 ring-emerald-100"
-                        : ehProximo
-                          ? "bg-indigo-50 text-indigo-800 font-semibold ring-indigo-200"
-                          : "bg-slate-50 text-slate-400 ring-transparent"
-                    }`}
-                  >
-                    <span className="flex items-center gap-2">
-                      <span>{feito ? "✓" : ehProximo ? "→" : "•"}</span>
-                      {step.label}
-                    </span>
-                    <span className="tabular-nums">
-                      {feito ? feito.time : ehProximo ? "agora" : "—"}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
 
             {confirmation && (
               <p className="rounded-xl bg-emerald-100 text-emerald-800 p-3 text-center font-semibold">
@@ -301,7 +293,27 @@ export default function Kiosk({
               </button>
             )}
 
-            <button onClick={reset} className="btn-ghost w-full p-2.5">
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+                  Meu ponto
+                </h2>
+                <span className="text-xs text-slate-400">
+                  hoje + últimos 31 dias
+                </span>
+              </div>
+
+              <PunchTable
+                rows={mergedRows(status, history)}
+                highlightDate={todayStr()}
+                scroll
+              />
+            </div>
+
+            <button
+              onClick={reset}
+              className="btn-ghost w-full p-2.5 md:mx-auto md:w-64 md:block"
+            >
               Voltar
             </button>
           </div>
@@ -315,6 +327,107 @@ export default function Kiosk({
       </div>
     </main>
   );
+}
+
+function todayStr() {
+  return new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD local
+}
+
+// Monta a linha de hoje a partir do status, no mesmo formato da tabela.
+function todayRow(status: DayStatus, history: HistoryRow[]): HistoryRow {
+  const today = todayStr();
+  const timeOf = (t: PunchType) =>
+    status.done.find((d) => d.type === t)?.time ?? "";
+  return {
+    workDate: today,
+    entrada: timeOf("entrada"),
+    almocoSaida: timeOf("almoco_saida"),
+    almocoVolta: timeOf("almoco_volta"),
+    saida: timeOf("saida"),
+    worked: history.find((r) => r.workDate === today)?.worked ?? "—",
+  };
+}
+
+// Junta o dia de hoje (no topo) com o histórico, sem duplicar a linha de hoje.
+function mergedRows(status: DayStatus, history: HistoryRow[]): HistoryRow[] {
+  const today = todayStr();
+  return [
+    todayRow(status, history),
+    ...history.filter((r) => r.workDate !== today),
+  ];
+}
+
+function PunchTable({
+  rows,
+  scroll = false,
+  highlightDate,
+}: {
+  rows: HistoryRow[];
+  scroll?: boolean;
+  highlightDate?: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl ring-1 ring-slate-100">
+      <div className={scroll ? "max-h-80 overflow-y-auto" : ""}>
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-slate-50 text-left text-[11px] uppercase tracking-wider text-slate-400">
+            <tr>
+              <th className="px-3 py-2 font-semibold">Data</th>
+              <th className="px-2 py-2 font-semibold">Entr.</th>
+              <th className="px-2 py-2 font-semibold">Almoço</th>
+              <th className="px-2 py-2 font-semibold">Volta</th>
+              <th className="px-2 py-2 font-semibold">Saída</th>
+              <th className="px-3 py-2 text-right font-semibold">Horas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const isToday = r.workDate === highlightDate;
+              return (
+              <tr
+                key={r.workDate}
+                className={`border-t border-slate-100 ${
+                  isToday
+                    ? "bg-indigo-50/70 hover:bg-indigo-50"
+                    : "hover:bg-slate-50/70"
+                }`}
+              >
+                <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-700">
+                  {formatBr(r.workDate)}
+                  {isToday && (
+                    <span className="ml-2 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700 align-middle">
+                      hoje
+                    </span>
+                  )}
+                </td>
+                <td className="px-2 py-2 tabular-nums text-slate-600">
+                  {r.entrada || "—"}
+                </td>
+                <td className="px-2 py-2 tabular-nums text-slate-600">
+                  {r.almocoSaida || "—"}
+                </td>
+                <td className="px-2 py-2 tabular-nums text-slate-600">
+                  {r.almocoVolta || "—"}
+                </td>
+                <td className="px-2 py-2 tabular-nums text-slate-600">
+                  {r.saida || "—"}
+                </td>
+                <td className="px-3 py-2 text-right font-semibold tabular-nums text-indigo-700">
+                  {r.worked}
+                </td>
+              </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function formatBr(d: string) {
+  const [y, m, day] = d.split("-");
+  return `${day}/${m}/${y}`;
 }
 
 function hojeFmt() {
