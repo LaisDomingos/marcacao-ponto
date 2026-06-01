@@ -30,6 +30,11 @@ export function formatTime(iso: string): string {
   }).format(new Date(iso));
 }
 
+/** Primeiro dia (YYYY-MM-01) do mês da data informada (padrão: hoje). */
+export function monthStart(dateStr: string = workDate()): string {
+  return `${dateStr.slice(0, 7)}-01`;
+}
+
 /** Data legível DD/MM/AAAA a partir de YYYY-MM-DD. */
 export function formatDateBr(workDateStr: string): string {
   const [y, m, d] = workDateStr.split("-");

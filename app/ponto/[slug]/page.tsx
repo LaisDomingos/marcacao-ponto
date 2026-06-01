@@ -11,7 +11,7 @@ export default async function PontoPage({ params }: Props) {
 
   const { data: company } = await getSupabase()
     .from("companies")
-    .select("id, name, logo_url")
+    .select("id, name, logo_url, allow_manual_punch")
     .eq("slug", slug)
     .maybeSingle();
 
@@ -22,6 +22,7 @@ export default async function PontoPage({ params }: Props) {
       companyId={company.id}
       companyName={company.name}
       companyLogo={company.logo_url}
+      allowManual={company.allow_manual_punch}
     />
   );
 }

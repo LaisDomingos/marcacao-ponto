@@ -7,6 +7,7 @@ export interface Company {
   name: string;
   slug: string;
   logo_url: string | null;
+  allow_manual_punch: boolean;
   created_at: string;
 }
 

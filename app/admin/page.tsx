@@ -9,18 +9,30 @@ export default async function AdminPage() {
   const admin = await getAuthenticatedAdmin();
   if (!admin) redirect("/admin/login");
 
-  const { data: company } = await getSupabase()
+  const sb = getSupabase();
+
+  // Colunas essenciais (sempre existem): nome e slug, que geram o código/link.
+  const { data: core } = await sb
     .from("companies")
-    .select("name, slug, logo_url")
+    .select("name, slug")
+    .eq("id", admin.companyId)
+    .maybeSingle();
+
+  // Colunas opcionais (podem não existir se a migração ainda não rodou).
+  // Buscadas à parte para não derrubar o código/link em caso de erro.
+  const { data: extra } = await sb
+    .from("companies")
+    .select("logo_url, allow_manual_punch")
     .eq("id", admin.companyId)
     .maybeSingle();
 
   return (
     <AdminDashboard
       email={admin.email ?? ""}
-      companyName={company?.name ?? "Minha empresa"}
-      companySlug={company?.slug ?? ""}
-      companyLogo={company?.logo_url ?? null}
+      companyName={core?.name ?? "Minha empresa"}
+      companySlug={core?.slug ?? ""}
+      companyLogo={extra?.logo_url ?? null}
+      allowManualPunch={extra?.allow_manual_punch ?? false}
     />
   );
 }
