@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply text-slate-800 antialiased min-h-screen;
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
+    radial-gradient(1000px 500px at -10% 110%, rgba(56, 189, 248, 0.12), transparent 55%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+  background-attachment: fixed;
+}
+
+@layer components {
+  /* Cartão padrão */
+  .card {
+    @apply bg-white/80 backdrop-blur-sm rounded-3xl shadow-xl shadow-slate-300/30 ring-1 ring-slate-200/70;
+  }
+
+  /* Campos de formulário */
+  .field {
+    @apply mt-1 w-full rounded-xl border border-slate-200 bg-white/70 p-3 text-slate-800
+           outline-none transition focus:border-indigo-400 focus:ring-4 focus:ring-indigo-100;
+  }
+  .field-label {
+    @apply text-sm font-medium text-slate-600;
+  }
+
+  /* Botões */
+  .btn-primary {
+    @apply rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-semibold
+           shadow-lg shadow-indigo-500/25 transition hover:from-indigo-700 hover:to-blue-700
+           active:scale-[0.99] disabled:opacity-40 disabled:shadow-none;
+  }
+  .btn-ghost {
+    @apply rounded-xl border border-slate-200 bg-white/70 text-slate-600 font-medium
+           transition hover:bg-white hover:text-slate-800;
+  }
+
+  /* Selo/estado */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold;
+  }
+}
