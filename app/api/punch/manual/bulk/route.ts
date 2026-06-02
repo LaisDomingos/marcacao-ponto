@@ -89,26 +89,28 @@ export async function POST(req: Request) {
 
   const today = workDate();
   const start = monthStart(today);
+  const ym = today.slice(0, 7);
+  const [y, mo] = today.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const end = `${ym}-${String(lastDay).padStart(2, "0")}`;
 
-  // Dias que já têm alguma marcação (para não sobrescrever).
+  // Dias que já têm alguma marcação no mês (para não sobrescrever).
   const { data: existing } = await sb
     .from("punches")
     .select("work_date")
     .eq("company_id", emp.company_id)
     .eq("employee_id", emp.id)
     .gte("work_date", start)
-    .lte("work_date", today);
+    .lte("work_date", end);
   const filledDays = new Set(
     ((existing ?? []) as Pick<Punch, "work_date">[]).map((p) => p.work_date)
   );
 
-  const ym = today.slice(0, 7);
-  const todayDay = Number(today.slice(8, 10));
-
   const toInsert: Omit<Punch, "id" | "created_at">[] = [];
   let daysFilled = 0;
 
-  for (let d = 1; d <= todayDay; d++) {
+  // Mês inteiro: do dia 1 ao último dia do mês.
+  for (let d = 1; d <= lastDay; d++) {
     const dd = String(d).padStart(2, "0");
     const wd = `${ym}-${dd}`;
     // Dia da semana da data (independente de fuso): meio-dia UTC.

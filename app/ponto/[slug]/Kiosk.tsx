@@ -7,6 +7,7 @@ type PunchType = "entrada" | "almoco_saida" | "almoco_volta" | "saida";
 interface DayStatus {
   employeeId: number;
   employeeName: string;
+  weeklyHours: number;
   done: { type: PunchType; label: string; time: string }[];
   next: PunchType | null;
   finished: boolean;
@@ -27,6 +28,21 @@ const NEXT_BUTTON_LABEL: Record<PunchType, string> = {
   almoco_volta: "Registrar Volta do Almoço",
   saida: "Registrar Saída",
 };
+
+type ColKey = "entrada" | "almocoSaida" | "almocoVolta" | "saida";
+const ALL_COLS: { key: ColKey; type: PunchType; label: string }[] = [
+  { key: "entrada", type: "entrada", label: "Entr." },
+  { key: "almocoSaida", type: "almoco_saida", label: "Almoço" },
+  { key: "almocoVolta", type: "almoco_volta", label: "Volta" },
+  { key: "saida", type: "saida", label: "Saída" },
+];
+
+// 20h não tem almoço: só entrada e saída.
+function colsFor(weeklyHours: number) {
+  return weeklyHours === 20
+    ? ALL_COLS.filter((c) => c.type === "entrada" || c.type === "saida")
+    : ALL_COLS;
+}
 
 export default function Kiosk({
   companyId,
@@ -217,13 +233,18 @@ export default function Kiosk({
     }
     setBulkSaving(true);
     try {
+      // 20h não tem almoço: envia só entrada e saída.
+      const times =
+        status?.weeklyHours === 20
+          ? { entrada: bulkTimes.entrada, saida: bulkTimes.saida }
+          : bulkTimes;
       const res = await fetch("/api/punch/manual/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           employeeId: selectedId,
           pin,
-          times: bulkTimes,
+          times,
           weekdays: bulkDays,
         }),
       });
@@ -242,6 +263,30 @@ export default function Kiosk({
     } finally {
       setBulkSaving(false);
     }
+  }
+
+  // Ferramenta de teste: apaga todas as marcações do funcionário.
+  async function clearAll() {
+    if (
+      !window.confirm(
+        "Apagar TODAS as marcações deste funcionário? (ferramenta de teste)"
+      )
+    )
+      return;
+    setError("");
+    setConfirmation("");
+    const res = await fetch("/api/punch/manual/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ employeeId: selectedId, pin }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error ?? "Erro ao apagar.");
+      return;
+    }
+    setConfirmation("Todas as marcações foram apagadas.");
+    await loadStatus();
   }
 
   return (
@@ -375,7 +420,7 @@ export default function Kiosk({
                   Meu ponto
                 </h2>
                 <span className="text-xs text-slate-400">
-                  hoje + últimos 31 dias
+                  {allowManual ? "mês atual + histórico" : "hoje + últimos 31 dias"}
                 </span>
               </div>
 
@@ -397,6 +442,7 @@ export default function Kiosk({
 
               {allowManual && showBulk && (
                 <BulkFill
+                  cols={colsFor(status.weeklyHours)}
                   times={bulkTimes}
                   setTimes={setBulkTimes}
                   days={bulkDays}
@@ -408,14 +454,28 @@ export default function Kiosk({
               )}
 
               <PunchTable
+                cols={colsFor(status.weeklyHours)}
                 rows={buildRows(status, history, allowManual)}
                 highlightDate={todayStr()}
                 scroll
                 onSave={allowManual ? manualSave : undefined}
                 editFrom={monthStartStr(todayStr())}
-                editTo={todayStr()}
+                editTo={
+                  hasFutureFill(history)
+                    ? monthEndStr(todayStr())
+                    : todayStr()
+                }
               />
             </div>
+
+            {allowManual && previewEndOfMonth && (
+              <button
+                onClick={clearAll}
+                className="mx-auto block rounded-lg px-4 py-2 text-sm font-medium text-red-600 ring-1 ring-red-200 hover:bg-red-50"
+              >
+                🗑 Apagar tudo (teste)
+              </button>
+            )}
 
             <button
               onClick={reset}
@@ -444,9 +504,15 @@ function monthStartStr(dateStr: string) {
   return `${dateStr.slice(0, 7)}-01`;
 }
 
-// "Fim do mês": do dia 20 em diante.
+function monthEndStr(dateStr: string) {
+  const [y, m] = dateStr.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${dateStr.slice(0, 7)}-${String(last).padStart(2, "0")}`;
+}
+
+// "Fim do mês": do dia 15 em diante.
 function isEndOfMonth() {
-  return Number(todayStr().slice(8, 10)) >= 20;
+  return Number(todayStr().slice(8, 10)) >= 15;
 }
 
 const WEEKDAYS: { value: number; label: string }[] = [
@@ -459,12 +525,12 @@ const WEEKDAYS: { value: number; label: string }[] = [
   { value: 0, label: "Dom" },
 ];
 
-const BULK_FIELDS: { key: keyof BulkTimes; label: string }[] = [
-  { key: "entrada", label: "Entrada" },
-  { key: "almocoSaida", label: "Saída p/ almoço" },
-  { key: "almocoVolta", label: "Volta do almoço" },
-  { key: "saida", label: "Saída" },
-];
+const BULK_LABELS: Record<ColKey, string> = {
+  entrada: "Entrada",
+  almocoSaida: "Saída p/ almoço",
+  almocoVolta: "Volta do almoço",
+  saida: "Saída",
+};
 
 type BulkTimes = {
   entrada: string;
@@ -474,6 +540,7 @@ type BulkTimes = {
 };
 
 function BulkFill({
+  cols,
   times,
   setTimes,
   days,
@@ -482,6 +549,7 @@ function BulkFill({
   onApply,
   onCancel,
 }: {
+  cols: { key: ColKey; type: PunchType; label: string }[];
   times: BulkTimes;
   setTimes: (t: BulkTimes) => void;
   days: number[];
@@ -523,13 +591,13 @@ function BulkFill({
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {BULK_FIELDS.map((f) => (
-          <label key={f.key} className="block">
-            <span className="field-label">{f.label}</span>
+        {cols.map((c) => (
+          <label key={c.key} className="block">
+            <span className="field-label">{BULK_LABELS[c.key]}</span>
             <input
               type="time"
-              value={times[f.key]}
-              onChange={(e) => setTimes({ ...times, [f.key]: e.target.value })}
+              value={times[c.key]}
+              onChange={(e) => setTimes({ ...times, [c.key]: e.target.value })}
               className="field tabular-nums"
             />
           </label>
@@ -537,8 +605,8 @@ function BulkFill({
       </div>
 
       <p className="mt-2 text-xs text-slate-500">
-        Aplica aos dias selecionados do dia 1 até hoje que ainda não têm
-        marcação. Depois você pode ajustar cada dia na tabela.
+        Aplica aos dias selecionados do mês inteiro que ainda não têm marcação.
+        Depois você pode ajustar cada dia na tabela.
       </p>
 
       <div className="mt-3 flex gap-2">
@@ -572,9 +640,18 @@ function emptyRow(workDate: string): HistoryRow {
   };
 }
 
-// Linhas da tabela. Com lançamento manual, mostra TODOS os dias do mês atual
-// (do dia 1 até hoje, mesmo vazios) para serem editados, e abaixo os dias de
-// meses anteriores presentes no histórico (somente leitura).
+// Há marcação em algum dia FUTURO do mês atual? (ou seja, o mês já foi
+// preenchido até o fim via botão). Define se a tabela mostra o mês inteiro.
+function hasFutureFill(history: HistoryRow[]): boolean {
+  const today = todayStr();
+  const ym = today.slice(0, 7);
+  return history.some((r) => r.workDate.startsWith(ym) && r.workDate > today);
+}
+
+// Linhas da tabela. Com lançamento manual, mostra os dias do mês atual (mesmo
+// vazios) para serem editados, e abaixo os dias de meses anteriores do histórico
+// (somente leitura). Mostra o mês INTEIRO se o futuro já foi preenchido; caso
+// contrário, só até hoje.
 function buildRows(
   status: DayStatus,
   history: HistoryRow[],
@@ -584,13 +661,15 @@ function buildRows(
 
   const today = todayStr();
   const ym = today.slice(0, 7);
-  const todayDay = Number(today.slice(8, 10));
+  const lastDay = hasFutureFill(history)
+    ? Number(monthEndStr(today).slice(8, 10))
+    : Number(today.slice(8, 10)); // só até hoje
 
   const byDate = new Map(history.map((r) => [r.workDate, r]));
   byDate.set(today, todayRow(status, history)); // hoje vem do status
 
   const monthDays: HistoryRow[] = [];
-  for (let d = todayDay; d >= 1; d--) {
+  for (let d = lastDay; d >= 1; d--) {
     const wd = `${ym}-${String(d).padStart(2, "0")}`;
     monthDays.push(byDate.get(wd) ?? emptyRow(wd));
   }
@@ -626,14 +705,8 @@ function mergedRows(status: DayStatus, history: HistoryRow[]): HistoryRow[] {
   ];
 }
 
-const CELLS: { key: keyof HistoryRow; type: PunchType }[] = [
-  { key: "entrada", type: "entrada" },
-  { key: "almocoSaida", type: "almoco_saida" },
-  { key: "almocoVolta", type: "almoco_volta" },
-  { key: "saida", type: "saida" },
-];
-
 function PunchTable({
+  cols,
   rows,
   scroll = false,
   highlightDate,
@@ -641,6 +714,7 @@ function PunchTable({
   editFrom,
   editTo,
 }: {
+  cols: { key: ColKey; type: PunchType; label: string }[];
   rows: HistoryRow[];
   scroll?: boolean;
   highlightDate?: string;
@@ -660,10 +734,11 @@ function PunchTable({
           <thead className="sticky top-0 bg-slate-50 text-left text-[11px] uppercase tracking-wider text-slate-400">
             <tr>
               <th className="px-3 py-2 font-semibold">Data</th>
-              <th className="px-2 py-2 font-semibold">Entr.</th>
-              <th className="px-2 py-2 font-semibold">Almoço</th>
-              <th className="px-2 py-2 font-semibold">Volta</th>
-              <th className="px-2 py-2 font-semibold">Saída</th>
+              {cols.map((c) => (
+                <th key={c.key} className="px-2 py-2 font-semibold">
+                  {c.label}
+                </th>
+              ))}
               <th className="px-3 py-2 text-right font-semibold">Horas</th>
             </tr>
           </thead>
@@ -688,7 +763,7 @@ function PunchTable({
                       </span>
                     )}
                   </td>
-                  {CELLS.map(({ key, type }) => {
+                  {cols.map(({ key, type }) => {
                     const value = r[key] as string;
                     if (editable) {
                       return (

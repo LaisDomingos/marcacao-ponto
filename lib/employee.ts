@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import { getSupabase } from "./supabase";
 import type { Employee, Punch, PunchType } from "./types";
-import { nextPunchType, PUNCH_LABELS } from "./punch";
+import { nextPunchType, punchStepsFor, PUNCH_LABELS } from "./punch";
 import { formatTime, workDate } from "./time";
 
 // Jornadas semanais permitidas (horas contratadas).
@@ -10,6 +10,7 @@ export const ALLOWED_WEEKLY_HOURS = [20, 32, 40];
 export interface DayStatus {
   employeeId: number;
   employeeName: string;
+  weeklyHours: number;
   done: { type: PunchType; label: string; time: string; iso: string }[];
   next: PunchType | null;
   finished: boolean;
@@ -68,10 +69,14 @@ export async function buildDayStatus(emp: Employee): Promise<DayStatus> {
     time: formatTime(p.punched_at),
     iso: p.punched_at,
   }));
-  const next = nextPunchType(punches.map((p) => p.type));
+  const next = nextPunchType(
+    punches.map((p) => p.type),
+    punchStepsFor(emp.weekly_hours)
+  );
   return {
     employeeId: emp.id,
     employeeName: emp.name,
+    weeklyHours: emp.weekly_hours,
     done,
     next,
     finished: next === null,

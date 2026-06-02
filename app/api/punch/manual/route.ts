@@ -52,11 +52,14 @@ export async function POST(req: Request) {
     );
   }
 
-  // Só pode lançar dentro do mês atual, até hoje.
+  // Só pode lançar dentro do mês atual.
   const today = workDate();
-  if (date < monthStart(today) || date > today) {
+  const [y, mo] = today.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const monthEnd = `${today.slice(0, 7)}-${String(lastDay).padStart(2, "0")}`;
+  if (date < monthStart(today) || date > monthEnd) {
     return NextResponse.json(
-      { error: "Só é possível lançar dias do mês atual, até hoje." },
+      { error: "Só é possível lançar dias do mês atual." },
       { status: 400 }
     );
   }
