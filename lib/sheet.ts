@@ -6,6 +6,7 @@ import { formatTime, minutesToHHMM } from "./time";
 export interface SheetRow {
   employeeId: number;
   employeeName: string;
+  weeklyHours: number;
   workDate: string; // YYYY-MM-DD
   entrada: string; // HH:MM ou ""
   almocoSaida: string;
@@ -23,7 +24,7 @@ export interface SheetFilters {
 }
 
 interface JoinedPunch extends Punch {
-  employees: { name: string } | null;
+  employees: { name: string; weekly_hours: number } | null;
 }
 
 /**
@@ -33,7 +34,9 @@ interface JoinedPunch extends Punch {
 export async function buildSheet(filters: SheetFilters): Promise<SheetRow[]> {
   let query = getSupabase()
     .from("punches")
-    .select("id, employee_id, type, punched_at, work_date, employees(name)")
+    .select(
+      "id, employee_id, type, punched_at, work_date, employees(name, weekly_hours)"
+    )
     .eq("company_id", filters.companyId);
 
   if (filters.from) query = query.gte("work_date", filters.from);
@@ -64,6 +67,7 @@ export async function buildSheet(filters: SheetFilters): Promise<SheetRow[]> {
     result.push({
       employeeId: punches[0].employee_id,
       employeeName: punches[0].employees?.name ?? "—",
+      weeklyHours: punches[0].employees?.weekly_hours ?? 40,
       workDate: punches[0].work_date,
       entrada: timeOf("entrada"),
       almocoSaida: timeOf("almoco_saida"),
@@ -74,10 +78,13 @@ export async function buildSheet(filters: SheetFilters): Promise<SheetRow[]> {
     });
   }
 
+  // Mais recentes primeiro: dia decrescente e, dentro do dia, entrada mais
+  // tarde no topo. Sem entrada vai para o fim do dia.
   result.sort(
     (a, b) =>
-      a.employeeName.localeCompare(b.employeeName) ||
-      a.workDate.localeCompare(b.workDate)
+      b.workDate.localeCompare(a.workDate) ||
+      (b.entrada || "00:00").localeCompare(a.entrada || "00:00") ||
+      a.employeeName.localeCompare(b.employeeName)
   );
 
   return result;

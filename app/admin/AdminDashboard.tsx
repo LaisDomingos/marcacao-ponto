@@ -8,6 +8,7 @@ type PunchType = "entrada" | "almoco_saida" | "almoco_volta" | "saida";
 interface SheetRow {
   employeeId: number;
   employeeName: string;
+  weeklyHours: number;
   workDate: string;
   entrada: string;
   almocoSaida: string;
@@ -37,16 +38,23 @@ function todayStr() {
   return new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD local
 }
 
+// Primeiro dia do mês atual (YYYY-MM-01).
+function monthStartStr() {
+  return `${todayStr().slice(0, 7)}-01`;
+}
+
 export default function AdminDashboard({
   email,
   companyName,
   companySlug,
   companyLogo,
+  allowManualPunch,
 }: {
   email: string;
   companyName: string;
   companySlug: string;
   companyLogo: string | null;
+  allowManualPunch: boolean;
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<"folha" | "funcionarios">("folha");
@@ -55,8 +63,12 @@ export default function AdminDashboard({
   const [logo, setLogo] = useState(companyLogo);
   const [uploadingLogo, setUploadingLogo] = useState(false);
 
+  // ---- Lançamento manual de ponto pelo funcionário ----
+  const [manualPunch, setManualPunch] = useState(allowManualPunch);
+  const [savingManual, setSavingManual] = useState(false);
+
   // ---- Folha de ponto ----
-  const [from, setFrom] = useState(todayStr());
+  const [from, setFrom] = useState(monthStartStr());
   const [to, setTo] = useState(todayStr());
   const [filterEmployee, setFilterEmployee] = useState("");
   const [rows, setRows] = useState<SheetRow[]>([]);
@@ -136,6 +148,31 @@ export default function AdminDashboard({
       flash("Logo removida.");
     } else {
       flash("Erro ao remover a logo.");
+    }
+  }
+
+  async function toggleManualPunch(next: boolean) {
+    setSavingManual(true);
+    setManualPunch(next); // otimista
+    try {
+      const res = await fetch("/api/admin/company", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allowManualPunch: next }),
+      });
+      if (!res.ok) {
+        setManualPunch(!next); // desfaz
+        const d = await res.json();
+        flash(d.error ?? "Erro ao salvar a configuração.");
+        return;
+      }
+      flash(
+        next
+          ? "Funcionários podem lançar o ponto do mês manualmente."
+          : "Lançamento manual desativado."
+      );
+    } finally {
+      setSavingManual(false);
     }
   }
 
@@ -303,6 +340,33 @@ export default function AdminDashboard({
         </div>
       </div>
 
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4 card px-5 py-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            Lançamento manual de ponto
+          </p>
+          <p className="text-sm text-slate-500">
+            Permite que o funcionário lance/ajuste manualmente os pontos de
+            qualquer dia do mês atual na própria tela de ponto.
+          </p>
+        </div>
+        <button
+          role="switch"
+          aria-checked={manualPunch}
+          disabled={savingManual}
+          onClick={() => toggleManualPunch(!manualPunch)}
+          className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition disabled:opacity-50 ${
+            manualPunch ? "bg-indigo-600" : "bg-slate-300"
+          }`}
+        >
+          <span
+            className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
+              manualPunch ? "translate-x-6" : "translate-x-1"
+            }`}
+          />
+        </button>
+      </div>
+
       <nav className="flex gap-2 mb-6 p-1 rounded-2xl bg-slate-100/70 w-fit ring-1 ring-slate-200/70">
         <TabButton active={tab === "folha"} onClick={() => setTab("folha")}>
           Folha de Ponto
@@ -357,12 +421,6 @@ export default function AdminDashboard({
                 ))}
               </select>
             </label>
-            <a
-              href={exportUrl()}
-              className="ml-auto rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-4 py-2.5 font-semibold shadow-lg shadow-emerald-500/25 transition hover:from-emerald-700 hover:to-teal-700"
-            >
-              ⬇ Exportar Excel
-            </a>
           </div>
 
           <div className="card overflow-hidden">
@@ -403,20 +461,35 @@ export default function AdminDashboard({
                       {r.employeeName}
                     </td>
                     <td className="p-3 text-slate-600">{formatBr(r.workDate)}</td>
-                    {COLS.map((c) => (
-                      <td key={c.key} className="p-2">
-                        <input
-                          type="time"
-                          defaultValue={r[c.key] as string}
-                          onBlur={(e) => {
-                            if (e.target.value !== (r[c.key] as string)) {
-                              correct(r, c.type, e.target.value);
-                            }
-                          }}
-                          className="rounded-lg border border-slate-200 bg-white p-1 w-28 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-                        />
-                      </td>
-                    ))}
+                    {COLS.map((c) => {
+                      // 20h não tem almoço: células de almoço ficam inativas.
+                      const isLunch =
+                        c.type === "almoco_saida" || c.type === "almoco_volta";
+                      if (r.weeklyHours === 20 && isLunch) {
+                        return (
+                          <td
+                            key={c.key}
+                            className="p-2 text-center text-slate-300"
+                          >
+                            —
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={c.key} className="p-2">
+                          <input
+                            type="time"
+                            defaultValue={r[c.key] as string}
+                            onBlur={(e) => {
+                              if (e.target.value !== (r[c.key] as string)) {
+                                correct(r, c.type, e.target.value);
+                              }
+                            }}
+                            className="rounded-lg border border-slate-200 bg-white p-1 w-28 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                          />
+                        </td>
+                      );
+                    })}
                     <td className="p-3 font-semibold text-slate-800 tabular-nums">
                       {r.worked}
                     </td>

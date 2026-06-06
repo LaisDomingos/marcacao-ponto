@@ -2,17 +2,13 @@ import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { getAuthenticatedAdmin } from "@/lib/session";
 import { getSupabase } from "@/lib/supabase";
-import { buildSheet, type SheetRow } from "@/lib/sheet";
-import { formatDateBr, minutesToHHMM } from "@/lib/time";
+import { buildSheet } from "@/lib/sheet";
+import { workDate } from "@/lib/time";
+import { buildMonthlySheet, slugFilename } from "@/lib/xlsx";
 
-const HEADER_FILL: ExcelJS.Fill = {
-  type: "pattern",
-  pattern: "solid",
-  fgColor: { argb: "FFE5E7EB" },
-};
-
-// Gera o arquivo .xlsx da folha de ponto. Query: ?from=&to=&employeeId=
-// Com employeeId → folha individual; sem ele → folha de todos os funcionários.
+// Gera o .xlsx da folha de ponto no formato mensal "Registo Diário de Horas".
+// Query: ?from=&to=&employeeId=  (o mês é derivado de `from`)
+// Com employeeId → uma folha; sem ele → uma aba por funcionário ativo.
 export async function GET(req: Request) {
   const admin = await getAuthenticatedAdmin();
   if (!admin) {
@@ -25,19 +21,22 @@ export async function GET(req: Request) {
   const employeeIdParam = url.searchParams.get("employeeId");
   const employeeId = employeeIdParam ? Number(employeeIdParam) : undefined;
 
-  const rows = await buildSheet({
-    companyId: admin.companyId!,
-    from,
-    to,
-    employeeId,
-  });
+  const sb = getSupabase();
 
-  const periodo =
-    from || to
-      ? `${from ? formatDateBr(from) : "início"} a ${
-          to ? formatDateBr(to) : "hoje"
-        }`
-      : "completo";
+  // Nome da empresa (vai no título da folha).
+  const { data: company } = await sb
+    .from("companies")
+    .select("name")
+    .eq("id", admin.companyId!)
+    .maybeSingle();
+  const companyName = company?.name ?? "Empresa";
+
+  // Mês da folha: derivado de `from` (ou `to`, ou mês atual).
+  const month = (from || to || workDate()).slice(0, 7); // AAAA-MM
+  const [y, m] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const mFrom = `${month}-01`;
+  const mTo = `${month}-${String(lastDay).padStart(2, "0")}`;
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "Sistema de Ponto";
@@ -45,22 +44,56 @@ export async function GET(req: Request) {
   let filename: string;
 
   if (employeeId) {
-    // Nome e jornada do funcionário (mesmo sem marcações no período).
-    const { data: emp } = await getSupabase()
+    const { data: emp } = await sb
       .from("employees")
       .select("name, weekly_hours")
       .eq("id", employeeId)
       .eq("company_id", admin.companyId!)
       .maybeSingle();
-    const employeeName = emp?.name ?? rows[0]?.employeeName ?? "Funcionário";
-    const weeklyHours = emp?.weekly_hours ?? 40;
-    buildIndividualSheet(wb, employeeName, weeklyHours, periodo, rows);
-    filename = `folha-ponto_${slugFilename(employeeName)}_${from || "inicio"}_${
-      to || "hoje"
-    }.xlsx`;
+    const employeeName = emp?.name ?? "Funcionário";
+    const rows = await buildSheet({
+      companyId: admin.companyId!,
+      employeeId,
+      from: mFrom,
+      to: mTo,
+    });
+    buildMonthlySheet(wb, {
+      companyName,
+      employeeName,
+      weeklyHours: emp?.weekly_hours ?? 40,
+      month,
+      rows,
+    });
+    filename = `folha-ponto_${slugFilename(employeeName)}_${month}.xlsx`;
   } else {
-    buildAllSheet(wb, periodo, rows);
-    filename = `folha-ponto_${from || "inicio"}_${to || "hoje"}.xlsx`;
+    // Uma aba por funcionário ativo.
+    const { data: employees } = await sb
+      .from("employees")
+      .select("id, name, weekly_hours")
+      .eq("company_id", admin.companyId!)
+      .eq("active", true)
+      .order("name");
+
+    for (const emp of employees ?? []) {
+      const rows = await buildSheet({
+        companyId: admin.companyId!,
+        employeeId: emp.id,
+        from: mFrom,
+        to: mTo,
+      });
+      buildMonthlySheet(wb, {
+        companyName,
+        employeeName: emp.name,
+        weeklyHours: emp.weekly_hours ?? 40,
+        month,
+        rows,
+        sheetName: emp.name,
+      });
+    }
+    if ((employees ?? []).length === 0) {
+      wb.addWorksheet("Sem funcionários");
+    }
+    filename = `folha-ponto_${slugFilename(companyName)}_${month}.xlsx`;
   }
 
   const buffer = await wb.xlsx.writeBuffer();
@@ -73,143 +106,4 @@ export async function GET(req: Request) {
       "Content-Disposition": `attachment; filename="${filename}"`,
     },
   });
-}
-
-// ---- Folha individual: nome + período + carga horária no topo; tabela só
-// com Data, Entrada, Almoço, Entrada Almoço, Saída. ----
-function buildIndividualSheet(
-  wb: ExcelJS.Workbook,
-  employeeName: string,
-  weeklyHours: number,
-  periodo: string,
-  rows: SheetRow[]
-) {
-  const ws = wb.addWorksheet("Folha de Ponto");
-  const totalMinutes = rows.reduce((s, r) => s + r.workedMinutes, 0);
-
-  ws.mergeCells("A1:E1");
-  ws.getCell("A1").value = employeeName;
-  ws.getCell("A1").font = { bold: true, size: 14 };
-
-  ws.mergeCells("A2:E2");
-  ws.getCell("A2").value = `Período: ${periodo}`;
-  ws.getCell("A2").font = { italic: true };
-
-  ws.mergeCells("A3:E3");
-  ws.getCell("A3").value = `Jornada semanal: ${weeklyHours}h`;
-  ws.getCell("A3").font = { italic: true };
-
-  ws.mergeCells("A4:E4");
-  ws.getCell("A4").value = `Carga horária no período: ${minutesToHHMM(
-    totalMinutes
-  )}`;
-  ws.getCell("A4").font = { bold: true };
-
-  ws.addRow([]);
-
-  const headerRow = ws.addRow([
-    "Data",
-    "Entrada",
-    "Almoço",
-    "Entrada Almoço",
-    "Saída",
-  ]);
-  headerRow.font = { bold: true };
-  headerRow.eachCell((cell) => {
-    cell.fill = HEADER_FILL;
-    cell.border = { bottom: { style: "thin" } };
-  });
-
-  for (const r of rows) {
-    ws.addRow([
-      formatDateBr(r.workDate),
-      r.entrada,
-      r.almocoSaida,
-      r.almocoVolta,
-      r.saida,
-    ]);
-  }
-
-  ws.columns = [
-    { width: 14 },
-    { width: 10 },
-    { width: 10 },
-    { width: 16 },
-    { width: 10 },
-  ];
-}
-
-// ---- Folha de todos: mantém a coluna Funcionário e Horas Trabalhadas. ----
-function buildAllSheet(
-  wb: ExcelJS.Workbook,
-  periodo: string,
-  rows: SheetRow[]
-) {
-  const ws = wb.addWorksheet("Folha de Ponto");
-
-  ws.mergeCells("A1:G1");
-  ws.getCell("A1").value = "Folha de Ponto";
-  ws.getCell("A1").font = { bold: true, size: 14 };
-  ws.mergeCells("A2:G2");
-  ws.getCell("A2").value = `Período: ${periodo}`;
-  ws.getCell("A2").font = { italic: true };
-
-  const headerRow = ws.addRow([
-    "Funcionário",
-    "Data",
-    "Entrada",
-    "Saída Almoço",
-    "Volta Almoço",
-    "Saída",
-    "Horas Trabalhadas",
-  ]);
-  headerRow.font = { bold: true };
-  headerRow.eachCell((cell) => {
-    cell.fill = HEADER_FILL;
-    cell.border = { bottom: { style: "thin" } };
-  });
-
-  let totalMinutes = 0;
-  for (const r of rows) {
-    totalMinutes += r.workedMinutes;
-    ws.addRow([
-      r.employeeName,
-      formatDateBr(r.workDate),
-      r.entrada,
-      r.almocoSaida,
-      r.almocoVolta,
-      r.saida,
-      r.worked,
-    ]);
-  }
-
-  const totalRow = ws.addRow([
-    "Total",
-    "",
-    "",
-    "",
-    "",
-    "",
-    minutesToHHMM(totalMinutes),
-  ]);
-  totalRow.font = { bold: true };
-
-  ws.columns = [
-    { width: 28 },
-    { width: 12 },
-    { width: 10 },
-    { width: 14 },
-    { width: 14 },
-    { width: 10 },
-    { width: 18 },
-  ];
-}
-
-function slugFilename(name: string): string {
-  return name
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }

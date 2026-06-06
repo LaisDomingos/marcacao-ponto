@@ -27,11 +27,22 @@ export const PUNCH_BUTTON_LABELS: Record<PunchType, string> = {
  * Dado o conjunto de tipos já marcados no dia, retorna o próximo tipo esperado
  * ou null se o expediente já estiver encerrado.
  */
-export function nextPunchType(existingTypes: PunchType[]): PunchType | null {
-  for (const type of PUNCH_ORDER) {
+export function nextPunchType(
+  existingTypes: PunchType[],
+  order: PunchType[] = PUNCH_ORDER
+): PunchType | null {
+  for (const type of order) {
     if (!existingTypes.includes(type)) return type;
   }
   return null;
+}
+
+/**
+ * Etapas de marcação conforme a jornada. Jornada de 20h não tem almoço:
+ * apenas entrada e saída. Demais jornadas têm as 4 marcações.
+ */
+export function punchStepsFor(weeklyHours: number): PunchType[] {
+  return weeklyHours === 20 ? ["entrada", "saida"] : PUNCH_ORDER;
 }
 
 /**

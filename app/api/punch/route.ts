@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabase } from "@/lib/supabase";
 import { buildDayStatus, getTodaysPunches, verifyPin } from "@/lib/employee";
-import { nextPunchType, PUNCH_LABELS } from "@/lib/punch";
+import { nextPunchType, punchStepsFor, PUNCH_LABELS } from "@/lib/punch";
 import { nowIso, workDate } from "@/lib/time";
 
 // Registra a próxima marcação do funcionário.
@@ -22,7 +22,10 @@ export async function POST(req: Request) {
   }
 
   const punches = await getTodaysPunches(emp.id);
-  const next = nextPunchType(punches.map((p) => p.type));
+  const next = nextPunchType(
+    punches.map((p) => p.type),
+    punchStepsFor(emp.weekly_hours)
+  );
 
   if (!next) {
     return NextResponse.json(

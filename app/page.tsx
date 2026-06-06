@@ -74,8 +74,11 @@ export default function HomePage() {
         </form>
       </div>
 
-      <p className="mt-6 text-xs text-slate-400">
+      <p className="mt-6 text-xs text-slate-400 text-center">
         Feito para registrar entrada, almoço e saída de forma simples.
+        <br />
+        Desenvolvido por{" "}
+        <span className="font-semibold text-slate-500">Laís Santos</span>
       </p>
     </main>
   );
